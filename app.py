@@ -41,8 +41,8 @@ def scalping_logic_9_15(df):
     price, e9, e15 = float(curr["Close"]), float(curr["EMA9"]), float(curr["EMA15"])
     
     signal = "BUY" if (e9 > e15 and price > e9) else "SELL" if (e9 < e15 and price < e9) else "NO TRADE"
-    entry_point = f"₹{round(price, 2)}" if signal != "NO TRADE" else "Wait for Crossover"
-    reason = f"EMA9 ({round(e9,1)}) {' > ' if e9>e15 else ' < '} EMA15 ({round(e15,1)}) | Price vs EMA9: {round(price-e9,2)}"
+    entry_point = f"{round(price, 4)}" if signal != "NO TRADE" else "Wait for Crossover"
+    reason = f"EMA9 ({round(e9,2)}) {' > ' if e9>e15 else ' < '} EMA15 ({round(e15,2)}) | Price vs EMA9: {round(price-e9,2)}"
     
     return df, signal, price, entry_point, reason
 
@@ -66,8 +66,8 @@ def swing_logic_10_ema(df):
     p_close, p_e10 = float(prev["Close"]), float(prev["EMA10"])
 
     signal = "BUY (JACKPOT)" if (p_close < p_e10 and price > e10) else "SELL (JACKPOT)" if (p_close > p_e10 and price < e10) else "NO TRADE"
-    entry_point = f"₹{round(price, 2)}" if signal != "NO TRADE" else "Wait for Reversal"
-    reason = f"Prev C({round(p_close,1)}) vs E10({round(p_e10,1)}) | Curr C({round(price,1)}) vs E10({round(e10,1)})"
+    entry_point = f"{round(price, 4)}" if signal != "NO TRADE" else "Wait for Reversal"
+    reason = f"Prev C({round(p_close,2)}) vs E10({round(p_e10,2)}) | Curr C({round(price,2)}) vs E10({round(e10,2)})"
     
     return df, signal, price, entry_point, reason
 
@@ -96,6 +96,10 @@ def buffett_logic_active(df, symbol):
         eps = info.get('trailingEps') or 0
         bvps = info.get('bookValue') or 0
         
+        # If data is completely missing (like for Forex/Commodities), it fails safely
+        if not info.get('trailingEps'):
+            return df, "TECHNICAL ONLY", price, f"Wait for {round(sma200, 2)} (200 DMA)", f"Fundamentals NA for this asset class. Trading {'Above' if price > sma200 else 'Below'} 200 DMA."
+            
         graham_value = (22.5 * eps * bvps) ** 0.5 if (eps > 0 and bvps > 0) else 0
         exp_gain = ((graham_value - price) / price) * 100 if graham_value > 0 else 0
         
@@ -104,20 +108,20 @@ def buffett_logic_active(df, symbol):
         if score == 3:
             if price < sma200 and exp_gain > 15:
                 action = "STRONG INVEST"
-                entry_point = f"₹{round(price, 2)} (Now)"
+                entry_point = f"{round(price, 2)} (Now)"
             else:
                 action = "HOLD / SIP"
-                entry_point = f"₹{round(sma200, 2)} (200 DMA)"
+                entry_point = f"{round(sma200, 2)} (200 DMA)"
         elif score == 2:
             action = "WATCHLIST"
-            entry_point = f"₹{round(sma200, 2)} (200 DMA)"
+            entry_point = f"{round(sma200, 2)} (200 DMA)"
         else:
             action = "DIVEST / AVOID"
             entry_point = "N/A (Fundamentals Weak)"
 
         reason = f"ROE: {round(roe,2)}% | D/E: {round(de,2)} | P/E: {round(pe,2)} | Tech: {'Above' if price > sma200 else 'Below'} 200 DMA"
     except Exception:
-        action, entry_point, reason = "NO DATA", "N/A", "Fundamental Data Unavailable."
+        action, entry_point, reason = "TECHNICAL ONLY", f"Wait for {round(sma200, 2)}", f"Fundamental Data Unavailable. Trading {'Above' if price > sma200 else 'Below'} 200 DMA."
 
     return df, action, price, entry_point, reason
 
@@ -127,10 +131,23 @@ def buffett_logic_active(df, symbol):
 # Sidebar Controls
 with st.sidebar:
     st.header("⚙️ Controls")
-    symbol = st.text_input("Symbol", value="RELIANCE").upper()
+    
+    # NEW: Asset Class Selector
+    market_type = st.selectbox("Asset Class", ["Indian Stocks (NSE)", "Forex", "Commodities"])
+    
+    symbol = st.text_input("Symbol", value="RELIANCE" if market_type == "Indian Stocks (NSE)" else "EURUSD" if market_type == "Forex" else "GC").upper()
+    
+    # Helper Text
+    if market_type == "Forex":
+        st.caption("Try: EURUSD, USDJPY, GBPUSD, USDINR")
+    elif market_type == "Commodities":
+        st.caption("Try: GC (Gold), CL (Crude Oil), SI (Silver), NG (Nat Gas)")
+    
     mode = st.selectbox("Strategy Mode", ["Scalping (9/15)", "Swing (10 EMA)", "Long Term (Buffett)"])
     
     if st.button("Generate Fundamental Audit", type="primary"):
+        if market_type != "Indian Stocks (NSE)":
+            st.warning("⚠️ Fundamentals (P/E, ROE, etc.) only apply to Stocks. Audit report may be blank for Forex/Commodities.")
         st.session_state['show_audit'] = True
         
     with st.expander("Warren Buffett Checklist"):
@@ -145,25 +162,26 @@ with st.sidebar:
 
 # Main Execution
 if symbol:
-    # 1. Bulletproof the input: Remove any accidental spaces
     clean_symbol = symbol.strip().replace(" ", "").upper()
     
-    # 2. Legacy Ticker Mapping 
-    legacy_tickers = {
-        "TATAMOTORS": "TMPV", 
-        "TATA": "TMPV", 
-        "IRADA": "IREDA", 
-        "COCHINSHIPYARD": "COCHINSHIP", 
-        "COCHIN": "COCHINSHIP"
-    }
-    if clean_symbol in legacy_tickers:
-        clean_symbol = legacy_tickers[clean_symbol]
-
-    # 3. Format ticker for Indian Markets
-    fetch_sym = clean_symbol + '.NS' if not any(x in clean_symbol for x in ['.NS', '.BO', '=X', '^']) else clean_symbol
+    # Currency Formatting Logic
+    curr_symbol = "₹" if market_type == "Indian Stocks (NSE)" else "$" if market_type == "Commodities" else ""
     
-    # Updated Swing mode to fetch '1d' (daily) data instead of '1h' for better accuracy and reliability
-    interval, period = ("5m", "5d") if "Scalping" in mode else ("1d", "1y") if "Swing" in mode else ("1d", "2y")
+    # TICKER FORMATTING ENGINE
+    if market_type == "Indian Stocks (NSE)":
+        legacy_tickers = {"TATAMOTORS": "TMPV", "TATA": "TMPV", "IRADA": "IREDA", "COCHINSHIPYARD": "COCHINSHIP", "COCHIN": "COCHINSHIP"}
+        if clean_symbol in legacy_tickers:
+            clean_symbol = legacy_tickers[clean_symbol]
+        fetch_sym = clean_symbol + '.NS' if not any(x in clean_symbol for x in ['.NS', '.BO', '=X', '^']) else clean_symbol
+    
+    elif market_type == "Forex":
+        fetch_sym = clean_symbol + '=X' if '=X' not in clean_symbol else clean_symbol
+        
+    elif market_type == "Commodities":
+        fetch_sym = clean_symbol + '=F' if '=F' not in clean_symbol else clean_symbol
+
+    # Strategy Timeframes
+    interval, period = ("15m", "5d") if "Scalping" in mode else ("1d", "1y") if "Swing" in mode else ("1d", "2y")
     
     with st.spinner(f"Fetching data for {fetch_sym}..."):
         raw_df = yf.download(fetch_sym, period=period, interval=interval, auto_adjust=True, progress=False)
@@ -179,7 +197,6 @@ if symbol:
         else:
             df, signal, price, entry_point, reason = buffett_logic_active(raw_df, fetch_sym)
 
-        # Calculate Stop Loss and Target Exit based on 14-period ATR
         sl_text = "N/A"
         tgt_text = "N/A"
         
@@ -188,11 +205,11 @@ if symbol:
             atr = float(df['ATR'].iloc[-1])
             
             if "BUY" in signal:
-                sl_text = f"₹{round(price - atr, 2)} (-1 ATR)"
-                tgt_text = f"₹{round(price + (2 * atr), 2)} (+2 ATR)"
+                sl_text = f"{curr_symbol}{round(price - atr, 4)} (-1 ATR)"
+                tgt_text = f"{curr_symbol}{round(price + (2 * atr), 4)} (+2 ATR)"
             elif "SELL" in signal:
-                sl_text = f"₹{round(price + atr, 2)} (+1 ATR)"
-                tgt_text = f"₹{round(price - (2 * atr), 2)} (-2 ATR)"
+                sl_text = f"{curr_symbol}{round(price + atr, 4)} (+1 ATR)"
+                tgt_text = f"{curr_symbol}{round(price - (2 * atr), 4)} (-2 ATR)"
             else:
                 sl_text = "Wait for Signal"
                 tgt_text = "Wait for Signal"
@@ -200,17 +217,17 @@ if symbol:
             sl_text = "Long Term Hold"
             tgt_text = "See Audit Report"
 
-        # Expanded Top Metric Dashboard
         col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Current Price", f"₹{price:,.2f}")
+        # Use 4 decimal places for Forex since pip movements are tiny
+        decimals = 4 if market_type == "Forex" else 2
+        col1.metric("Current Price", f"{curr_symbol}{price:,.{decimals}f}")
         col2.metric("Action Signal", signal)
-        col3.metric("Entry Point", entry_point)
+        col3.metric("Entry Point", f"{curr_symbol}{entry_point}")
         col4.metric("Target Exit", tgt_text)
         col5.metric("Stop Loss", sl_text)
         
         st.info(reason)
 
-        # Plotly Interactive Chart
         st.subheader(f"{fetch_sym} Chart")
         
         if df is not None and not df.empty:
@@ -218,11 +235,9 @@ if symbol:
             
             fig = go.Figure()
             
-            # Candlestick
             fig.add_trace(go.Candlestick(x=display_df.index, open=display_df['Open'], high=display_df['High'], 
                                          low=display_df['Low'], close=display_df['Close'], name='Price'))
             
-            # Strategy Lines
             if "Scalping" in mode and "EMA9" in display_df.columns:
                 fig.add_trace(go.Scatter(x=display_df.index, y=display_df['EMA9'], line=dict(color='yellow', width=1), name='EMA 9'))
                 fig.add_trace(go.Scatter(x=display_df.index, y=display_df['EMA15'], line=dict(color='cyan', width=1), name='EMA 15'))
@@ -232,7 +247,6 @@ if symbol:
                 fig.add_trace(go.Scatter(x=display_df.index, y=display_df['SMA50'], line=dict(color='cyan', width=1), name='SMA 50'))
                 fig.add_trace(go.Scatter(x=display_df.index, y=display_df['SMA200'], line=dict(color='magenta', width=2), name='SMA 200'))
 
-            # Buy/Sell Markers
             if 'Buy_Signal' in display_df.columns and not display_df['Buy_Signal'].isna().all():
                 fig.add_trace(go.Scatter(x=display_df.index, y=display_df['Buy_Signal'], mode='markers', 
                                          marker=dict(symbol='triangle-up', size=15, color='lime'), name='Buy'))
@@ -259,12 +273,12 @@ if st.session_state.get('show_audit', False):
                     if val is None or pd.isna(val): return "N/A"
                     try:
                         v = float(val)
-                        if kind == "curr": return f"₹{v:,.2f}"
+                        if kind == "curr": return f"{curr_symbol}{v:,.2f}"
                         if kind == "pct": return f"{v * 100:.2f}%"
                         if kind == "x": return f"{v:.2f}x"
                         if kind == "large_curr": 
-                            if abs(v) >= 1e7: return f"₹{v/1e7:,.2f} Cr"
-                            return f"₹{v:,.0f}"
+                            if abs(v) >= 1e7: return f"{curr_symbol}{v/1e7:,.2f} Cr"
+                            return f"{curr_symbol}{v:,.0f}"
                         return f"{v:.2f}"
                     except:
                         return "N/A"
@@ -295,9 +309,11 @@ if st.session_state.get('show_audit', False):
                 
                 if graham_val > 0:
                     if exp_return > 0:
-                        st.success(f"**Undervalued:** Stock is trading below Graham intrinsic value. Expected Return: **{fmt(exp_return, 'pct')}**")
+                        st.success(f"**Undervalued:** Asset is trading below Graham intrinsic value. Expected Return: **{fmt(exp_return, 'pct')}**")
                     else:
-                        st.error(f"**Overvalued:** Stock is trading above Graham intrinsic value. Premium: **{fmt(abs(exp_return), 'pct')}**")
+                        st.error(f"**Overvalued:** Asset is trading above Graham intrinsic value. Premium: **{fmt(abs(exp_return), 'pct')}**")
+                elif market_type != "Indian Stocks (NSE)":
+                    st.info("Valuation metrics (Graham Value, P/E, P/B) are not applicable to Forex and Commodities.")
                 
                 st.divider()
                 
@@ -330,6 +346,6 @@ if st.session_state.get('show_audit', False):
                     st.rerun()
 
             except Exception as e:
-                st.error(f"Failed to fetch detailed audit data. Ensure the ticker symbol is valid.\nError Details: {e}")
+                st.error(f"Failed to fetch detailed audit data.\nError Details: {e}")
             
     show_audit_dialog()
