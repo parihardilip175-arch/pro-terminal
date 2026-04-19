@@ -39,7 +39,7 @@ def get_trend(symbol, interval):
     except: return "⚪"
 
 def run_market_radar():
-    watch_list = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "SBI.NS", "BHARTIARTL.NS", "ITC.NS", "LT.NS", "BAJFINANCE.NS", "ZOMATO.NS", "TRENT.NS", "HINDALCO.NS"]
+    watch_list = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "SBI.NS", "BHARTIARTL.NS", "ITC.NS", "LT.NS", "BAJFINANCE.NS", "ZOMATO.NS", "TRENT.NS"]
     results = []
     for sym in watch_list:
         df = yf.download(sym, period="1y", interval="1d", auto_adjust=True, progress=False)
@@ -52,6 +52,7 @@ def run_market_radar():
             curr = df.iloc[-1]
             price = curr['Close']
             
+            # RSI(2) High Probability Pullback Condition
             if price > curr['SMA200'] and curr['RSI_2'] < 10:
                 df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
                 atr = float(df['ATR'].iloc[-1])
@@ -97,7 +98,8 @@ def run_backtest(df):
 # ===============================
 with st.sidebar:
     st.header("⚙️ Controls")
-    market_type = st.selectbox("Asset Class", ["Indian Stocks (NSE)", "Forex", "Commodities"])
+    # Added Crypto to Asset Class
+    market_type = st.selectbox("Asset Class", ["Indian Stocks (NSE)", "Forex", "Commodities", "Crypto"])
     
     st.divider()
     st.subheader("🛡️ Risk Manager")
@@ -107,11 +109,28 @@ with st.sidebar:
     st.divider()
     comm_map = {"GOLD": "GC", "SILVER": "SI", "COPPER": "HG", "CRUDE": "CL", "NATGAS": "NG"}
     fx_map = {"EUR": "EURUSD", "GBP": "GBPUSD", "JPY": "USDJPY", "INR": "USDINR"}
+    crypto_map = {"BITCOIN": "BTC-USD", "BTC": "BTC-USD", "ETHEREUM": "ETH-USD", "ETH": "ETH-USD", "SOLANA": "SOL-USD", "DOGE": "DOGE-USD"}
     
     raw_input = st.text_input("Search Name", value="HINDALCO").upper().strip()
     mode = st.selectbox("Strategy", ["Swing (RSI-2 High-Win)", "Scalping (15m)", "Long Term (Buffett)"])
     
     if st.button("Generate CA Audit (In-Depth)", type="primary"): st.session_state['show_audit'] = True
+
+# ===============================
+# CENTRALIZED TICKER RESOLUTION
+# ===============================
+if raw_input:
+    if market_type == "Indian Stocks (NSE)":
+        fetch_sym = raw_input + ".NS" if ".NS" not in raw_input else raw_input
+    elif market_type == "Forex":
+        fetch_sym = fx_map.get(raw_input, raw_input) + "=X"
+    elif market_type == "Commodities":
+        fetch_sym = comm_map.get(raw_input, raw_input) + "=F"
+    elif market_type == "Crypto":
+        # Format for crypto (e.g. BTC-USD)
+        fetch_sym = crypto_map.get(raw_input, raw_input + "-USD" if "-" not in raw_input else raw_input)
+        
+    curr_prefix = "₹" if market_type == "Indian Stocks (NSE)" else "$"
 
 # TABS SETUP
 tab1, tab2, tab3 = st.tabs(["📊 Live Terminal", "📡 Market Radar", "🧪 Backtester"])
@@ -121,15 +140,6 @@ tab1, tab2, tab3 = st.tabs(["📊 Live Terminal", "📡 Market Radar", "🧪 Bac
 # ===============================
 with tab1:
     if raw_input:
-        curr_prefix = "₹" if market_type == "Indian Stocks (NSE)" else "$"
-        
-        if market_type == "Indian Stocks (NSE)":
-            fetch_sym = raw_input + ".NS" if ".NS" not in raw_input else raw_input
-        elif market_type == "Forex":
-            fetch_sym = fx_map.get(raw_input, raw_input) + "=X"
-        else:
-            fetch_sym = comm_map.get(raw_input, raw_input) + "=F"
-
         with st.spinner("Analyzing Market Structure..."):
             t_d, t_w, t_m = get_trend(fetch_sym, "1d"), get_trend(fetch_sym, "1wk"), get_trend(fetch_sym, "1mo")
             
@@ -241,7 +251,7 @@ with tab1:
                 entry_text = f"{curr_prefix}{price:,.{dec}f}" 
                 qty = int(risk_amt / abs(price - sl_price)) if abs(price - sl_price) > 0 else 0
 
-            # DASHBOARD UI (Applying Dynamic Labels)
+            # DASHBOARD UI
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Live Price", f"{curr_prefix}{price:,.{dec}f}")
             c2.metric("Signal", signal)
@@ -270,6 +280,8 @@ with tab1:
 
             fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.error("No data found. Please check the spelling of the search name or the selected Asset Class.")
 
 # ===============================
 # TAB 2: MARKET RADAR
@@ -294,12 +306,8 @@ with tab3:
     st.write("Testing the **RSI(2) High Win-Rate Reversion Strategy** over the last 2 years.")
     
     if st.button("Run Backtest"):
-        if market_type == "Indian Stocks (NSE)":
-            test_sym = raw_input + ".NS" if ".NS" not in raw_input else raw_input
-        else: test_sym = raw_input
-        
         with st.spinner("Calculating historical data..."):
-            hist_df = yf.download(test_sym, period="2y", interval="1d", auto_adjust=True, progress=False)
+            hist_df = yf.download(fetch_sym, period="2y", interval="1d", auto_adjust=True, progress=False)
             hist_df = clean_dataframe(hist_df)
             if not hist_df.empty:
                 t, w, l, wr = run_backtest(hist_df)
@@ -324,10 +332,6 @@ if st.session_state.get('show_audit', False):
     def show_audit():
         st.markdown(f"### 📑 Institutional Fundamental Audit: **{raw_input}**")
         try:
-            fetch_sym = raw_input + ".NS" if market_type == "Indian Stocks (NSE)" and ".NS" not in raw_input else raw_input
-            if market_type == "Forex": fetch_sym = fx_map.get(raw_input, raw_input) + "=X"
-            elif market_type == "Commodities": fetch_sym = comm_map.get(raw_input, raw_input) + "=F"
-            
             ticker = yf.Ticker(fetch_sym)
             
             with st.spinner("Pulling raw financial statements..."):
@@ -390,7 +394,7 @@ if st.session_state.get('show_audit', False):
                 if abs(val) >= 1e12:
                     return f"{curr_prefix}{val/1e12:,.2f} LC" 
                 if abs(val) >= 1e7:
-                    return f"{curr_prefix}{val/1e7:,.0f} Cr" 
+                    return f"{curr_prefix}{val/1e7:,.0f} M" if market_type in ["Forex", "Crypto"] else f"{curr_prefix}{val/1e7:,.0f} Cr"
                 return f"{curr_prefix}{val:,.0f}"
 
             st.info(f"**Business Summary:** {info.get('longBusinessSummary', 'Summary not available.')}")
